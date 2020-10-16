@@ -1,7 +1,10 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-__author__ = 'Michael Liao'
+# __author__ = 'Michael Liao'
+__auther__ = 'Ayayaneru'
+# 有两个地方的'name' ==> '_' 改动
+# 围绕 web.Response 做了一些改动
 
 import asyncio, os, inspect, logging, functools
 
@@ -12,6 +15,7 @@ from aiohttp import web
 from apis import APIError
 
 def get(path):
+    # 函数通过@get()的装饰就附带了URL信息。
     '''
     Define decorator @get('/path')
     '''
@@ -25,6 +29,7 @@ def get(path):
     return decorator
 
 def post(path):
+
     '''
     Define decorator @post('/path')
     '''
@@ -37,13 +42,17 @@ def post(path):
         return wrapper
     return decorator
 
+# 下面这部分可以自行查阅 inspect 模块来理解
+# https://docs.python.org/zh-cn/3.8/index.html
 def get_required_kw_args(fn):
     args = []
     params = inspect.signature(fn).parameters
     for name, param in params.items():
         if param.kind == inspect.Parameter.KEYWORD_ONLY and param.default == inspect.Parameter.empty:
+            # 在 args 里加上仅包含关键字（keyword）的参数， 且不包括默认值， 然后返回 args
             args.append(name)
     return tuple(args)
+    # 所以这个函数的作用和名称一样， 得到需要的关键字参数, 下面同理
 
 def get_named_kw_args(fn):
     args = []
@@ -77,8 +86,10 @@ def has_request_arg(fn):
             raise ValueError('request parameter must be the last named parameter in function: %s%s' % (fn.__name__, str(sig)))
     return found
 
+# RequestHandler目的就是从URL函数中分析其需要接收的参数，从request中获取必要的参数
+# 调用URL函数，然后把结果转换为web.Response对象，这样，就完全符合aiohttp框架的要求
 class RequestHandler(object):
-
+# 这个类慢慢看吧， 不懂也没关系
     def __init__(self, app, fn):
         self._app = app
         self._func = fn
@@ -145,6 +156,7 @@ def add_static(app):
     app.router.add_static('/static/', path)
     logging.info('add static %s => %s' % ('/static/', path))
 
+# add_route函数，用来注册一个URL处理函数
 def add_route(app, fn):
     method = getattr(fn, '__method__', None)
     path = getattr(fn, '__route__', None)
@@ -155,6 +167,7 @@ def add_route(app, fn):
     logging.info('add route %s %s => %s(%s)' % (method, path, fn.__name__, ', '.join(inspect.signature(fn).parameters.keys())))
     app.router.add_route(method, path, RequestHandler(app, fn))
 
+# 把很多次add_route()注册的调用
 def add_routes(app, module_name):
     n = module_name.rfind('.')
     if n == (-1):

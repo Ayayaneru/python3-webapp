@@ -1,7 +1,9 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-__author__ = 'Michael Liao'
+# __author__ = 'Michael Liao'
+__auther__ = 'Ayayaneru'
+# 忘了改了啥了，若报错尝试自己修改
 
 '''
 async web application.
@@ -120,7 +122,7 @@ async def init(loop):
     srv = await loop.create_server(app.make_handler(), '127.0.0.1', 9000)
     logging.info('server started at http://127.0.0.1:9000...')
     return srv
-
+#  这里又用蔡老师的老代码， 懒得管了能跑就行
 loop = asyncio.get_event_loop()
 loop.run_until_complete(init(loop))
 loop.run_forever()
