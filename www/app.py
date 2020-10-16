@@ -1,70 +1,126 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 
-__author__ = 'Ayayaneru'
-# 我是萌新，大家一起学习一起进步
+__author__ = 'Michael Liao'
 
-# *** day02 begin ***
+'''
+async web application.
+'''
 
-# 导入 logging 模块并使用';'对其全局配置
-# 'import logging; logging.basicConfig(level=logging.INFO)'也可以不使用';'写成两行：
-# import logging
-# logging.basicConfig(level=logging.INFO)
-# logging 模块用法：参考自 https://zhuanlan.zhihu.com/p/56968001
-# basicConfig 配置了 level 信息，level 配置为 INFO 信息，即只输出 INFO 级别的信息
-# logging 日志的级别可参考下面的官方文档
-# https://docs.python.org/zh-cn/3.8/library/logging.html?highlight=logging#logging-levels
 import logging; logging.basicConfig(level=logging.INFO)
 
-import asyncio
+import asyncio, os, json, time
+from datetime import datetime
 
 from aiohttp import web
+from jinja2 import Environment, FileSystemLoader
 
-# async 加不加都能跑，但是我们项目就是异步IO，后面可能要用
-async def index(request):
-    # 请求---》web---》响应（我是这么理解的，具体请看源码）
-    # request         response
-    return web.Response(body=b'<h1>moe</h1>',headers={'content-type':'text/html'})
+import orm
+from coroweb import add_routes, add_static
 
-def init():
-    # 创建 web.Application ，这是我们web app的骨架
-    app = web.Application()
-    # 蔡老师源码如下：体会一下规范变了
-    # app.router.add_route('GET', '/', index)
-    app.router.add_get('/', index)
-    # *** 在 Visual Studio Code 下你可以按住 'Ctrl' 键点击函数 查看源码！***
-    # 尝试使用这个方法点击下面的 'run_app'
-    # 下面这一行代码内部调用了 loop 和 logging （蔡老师的代码过时了）
-    # 所以我们看似没调用开头导入的 logging 
-    # 实际上你可以不导入 logging 试一下
-    # 区别在于服务器终端会不会显示访问日志
-    # 这是因为 aiohttp 的规范变了， aiohttp 官网在下面给出
-    # http://demos.aiohttp.org/en/latest/tutorial.html
-    web.run_app(app,host='127.0.0.1',port=9000)
-    
-if __name__ == '__main__':
-    init()
+def init_jinja2(app, **kw):
+    logging.info('init jinja2...')
+    options = dict(
+        autoescape = kw.get('autoescape', True),
+        block_start_string = kw.get('block_start_string', '{%'),
+        block_end_string = kw.get('block_end_string', '%}'),
+        variable_start_string = kw.get('variable_start_string', '{{'),
+        variable_end_string = kw.get('variable_end_string', '}}'),
+        auto_reload = kw.get('auto_reload', True)
+    )
+    path = kw.get('path', None)
+    if path is None:
+        path = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates')
+    logging.info('set jinja2 template path: %s' % path)
+    env = Environment(loader=FileSystemLoader(path), **options)
+    filters = kw.get('filters', None)
+    if filters is not None:
+        for name, f in filters.items():
+            env.filters[name] = f
+    app['__templating__'] = env
 
+async def logger_factory(app, handler):
+    async def logger(request):
+        logging.info('Request: %s %s' % (request.method, request.path))
+        # await asyncio.sleep(0.3)
+        return (await handler(request))
+    return logger
 
+async def data_factory(app, handler):
+    async def parse_data(request):
+        if request.method == 'POST':
+            if request.content_type.startswith('application/json'):
+                request.__data__ = await request.json()
+                logging.info('request json: %s' % str(request.__data__))
+            elif request.content_type.startswith('application/x-www-form-urlencoded'):
+                request.__data__ = await request.post()
+                logging.info('request form: %s' % str(request.__data__))
+        return (await handler(request))
+    return parse_data
 
-# 蔡老师源码
-# https://github.com/michaelliao/awesome-python3-webapp/blob/day-02/www/app.py
-'''
-#this is a backup app
-#got it from https://aodabo.tech/blog/0015467140257875f2beaf701b94628a91c360026d97d13000
+async def response_factory(app, handler):
+    async def response(request):
+        logging.info('Response handler...')
+        r = await handler(request)
+        if isinstance(r, web.StreamResponse):
+            return r
+        if isinstance(r, bytes):
+            resp = web.Response(body=r)
+            resp.content_type = 'application/octet-stream'
+            return resp
+        if isinstance(r, str):
+            if r.startswith('redirect:'):
+                return web.HTTPFound(r[9:])
+            resp = web.Response(body=r.encode('utf-8'))
+            resp.content_type = 'text/html;charset=utf-8'
+            return resp
+        if isinstance(r, dict):
+            template = r.get('__template__')
+            if template is None:
+                resp = web.Response(body=json.dumps(r, ensure_ascii=False, default=lambda o: o.__dict__).encode('utf-8'))
+                resp.content_type = 'application/json;charset=utf-8'
+                return resp
+            else:
+                resp = web.Response(body=app['__templating__'].get_template(template).render(**r).encode('utf-8'))
+                resp.content_type = 'text/html;charset=utf-8'
+                return resp
+        if isinstance(r, int) and r >= 100 and r < 600:
+            return web.Response(text=r)
+        if isinstance(r, tuple) and len(r) == 2:
+            t, m = r
+            if isinstance(t, int) and t >= 100 and t < 600:
+                return web.Response(text=t,body=str(m))
+        # default:
+        resp = web.Response(body=str(r).encode('utf-8'))
+        resp.content_type = 'text/plain;charset=utf-8'
+        return resp
+    return response
 
-import logging;logging.basicConfig(level=logging.INFO)
-import asyncio
-from aiohttp import web
+def datetime_filter(t):
+    delta = int(time.time() - t)
+    if delta < 60:
+        return u'1分钟前'
+    if delta < 3600:
+        return u'%s分钟前' % (delta // 60)
+    if delta < 86400:
+        return u'%s小时前' % (delta // 3600)
+    if delta < 604800:
+        return u'%s天前' % (delta // 86400)
+    dt = datetime.fromtimestamp(t)
+    return u'%s年%s月%s日' % (dt.year, dt.month, dt.day)
 
-async def index(request):
-    return web.Response(body=b'<h1>Moe</h1>',content_type='text/html')
+async def init(loop):
+    await orm.create_pool(loop=loop, host='127.0.0.1', port=3306, user='root', password='369874125', db='moe')
+    app = web.Application(loop=loop, middlewares=[
+        logger_factory, response_factory
+    ])
+    init_jinja2(app, filters=dict(datetime=datetime_filter))
+    add_routes(app, 'handlers')
+    add_static(app)
+    srv = await loop.create_server(app.make_handler(), '127.0.0.1', 9000)
+    logging.info('server started at http://127.0.0.1:9000...')
+    return srv
 
-def init():
-    app=web.Application()
-    app.router.add_get('/',index)
-    web.run_app(app,host='127.0.0.1',port=9000)
-
-if __name__ == "__main__":
-    init()
-'''
+loop = asyncio.get_event_loop()
+loop.run_until_complete(init(loop))
+loop.run_forever()
